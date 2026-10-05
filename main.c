@@ -6,7 +6,6 @@
 #include <string.h>
 #include <sys/types.h>
 #include <time.h>
-#include <pthread.h>
 
 #define GRAPHICS_API_OPENGL_43
 #include "glad.h"
@@ -132,13 +131,11 @@ void nn_worker_train();
 void nn_worker_gen_texture();
 void restart_nn_worker();
 
-pthread_mutex_t nn_worker_mutex = PTHREAD_MUTEX_INITIALIZER;
-pthread_cond_t nn_worker_cond = PTHREAD_COND_INITIALIZER;
 bool nn_update_request = false;
 bool nn_texture_rdy = false;
 
 Network nn;
-size_t layout[] = { 2, 16, 16, 1 };
+size_t layout[] = { 2, 161, 16, 1 };
 
 Points points = {0};
 float rad = 5;
@@ -148,36 +145,16 @@ Color *pixel_front_buf;
 Color *pixel_back_buf;
 
 unsigned int nn_train_program;
+
+void nn_retrain();
+void nn_gen_texture();
+
 int main()
-{
-    srand(42);
-    
-    InitWindow(WINDOW_SIZE_W, WINDOW_SIZE_H, "Window");
-    nn = nn_alloc(layout, ARRAY_LEN(layout));
-    Row test = row_alloc(2);
-
-    ROW_AT(test, 0) = 0.5f;
-    ROW_AT(test, 1) = 0.5f;
-
-    char *nn_train_shader_src = LoadFileText(NN_FORWARD_SHADER_PATH);
-    unsigned int nn_train_shader = rlLoadShader(nn_train_shader_src, RL_COMPUTE_SHADER);
-    UnloadFileText(nn_train_shader_src);
-    nn_train_program = rlLoadShaderProgramCompute(nn_train_shader);
-    nn_forward_gpu(nn, test, (bool*)false);
-
-    row_print(NN_OUTPUT(nn), 0);
-
-    row_free(test);
-
-    return 0;
-}
-int main1()
 {
     srand(42);
     InitWindow(WINDOW_SIZE_W, WINDOW_SIZE_H, "Window");
     //SetTargetFPS(144);
 
-    pthread_t nn_thread;
     bool worker_should_stop = false; 
 
 #define SHOWLOSS
@@ -197,8 +174,6 @@ int main1()
 
     nn = nn_alloc(layout, ARRAY_LEN(layout));
 
-    pthread_create(&nn_thread, NULL, &nn_worker, &worker_should_stop);
-
     char *nn_train_shader_src = LoadFileText(NN_FORWARD_SHADER_PATH);
     unsigned int nn_train_shader = rlLoadShader(nn_train_shader_src, RL_COMPUTE_SHADER);
     UnloadFileText(nn_train_shader_src);
@@ -207,24 +182,19 @@ int main1()
     while(!WindowShouldClose()) {
         if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             Point p = (Point){ .pos.x = GetMousePosition().x, .pos.y = GetMousePosition().y, GREEN };    
-            pthread_mutex_lock(&nn_worker_mutex);
             da_append(points, p);
-            pthread_mutex_unlock(&nn_worker_mutex);
-            restart_nn_worker();
+            nn_retrain();
+            nn_gen_texture();
         } else if(IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
             Point p = (Point){ .pos.x = GetMousePosition().x, .pos.y = GetMousePosition().y, BLUE };    
-            pthread_mutex_lock(&nn_worker_mutex);
             da_append(points, p);
-            pthread_mutex_unlock(&nn_worker_mutex);
-            restart_nn_worker();
+            nn_retrain();
+            nn_gen_texture();
         }
         if(nn_texture_rdy) {
-            pthread_mutex_lock(&nn_worker_mutex);
             UpdateTexture(nn_texture, pixel_front_buf); 
             nn_texture_rdy = false;
-            pthread_mutex_unlock(&nn_worker_mutex);
         }
-
         BeginDrawing();
             ClearBackground(BLACK);
             DrawTexture(nn_texture, 0, 0, WHITE);
@@ -235,13 +205,9 @@ int main1()
             DrawFPS(10, 10);
         EndDrawing();
     }
-    pthread_mutex_lock(&nn_worker_mutex);
     worker_should_stop = true;
     nn_update_request = true;
-    pthread_cond_signal(&nn_worker_cond);
-    pthread_mutex_unlock(&nn_worker_mutex);
 
-    pthread_join(nn_thread, NULL);
 
     UnloadTexture(nn_texture);
     rlUnloadShaderProgram(nn_train_program);
@@ -251,28 +217,8 @@ int main1()
 
     return 0;
 }    
-void *nn_worker(void *should_stop)
+void nn_retrain() 
 {
-    bool *stop_flag = (bool*)should_stop;
-    while(true) {
-        pthread_mutex_lock(&nn_worker_mutex);
-        while (!nn_update_request && !(*stop_flag)) {
-            pthread_cond_wait(&nn_worker_cond, &nn_worker_mutex);
-        }
-        if (*stop_flag) {
-            pthread_mutex_unlock(&nn_worker_mutex);
-            break;
-        }
-        nn_update_request = false;
-        pthread_mutex_unlock(&nn_worker_mutex);
-        nn_worker_train();
-        nn_worker_gen_texture();
-    } 
-    return NULL;
-}
-void nn_worker_train() 
-{
-    pthread_mutex_lock(&nn_worker_mutex);
     Mat input = mat_alloc(points.count, 2);
     Mat target = mat_alloc(points.count, 1);
     for(size_t i = 0; i < points.count; i++) {
@@ -280,13 +226,12 @@ void nn_worker_train()
         MAT_AT(input, i, 1) = da_at(points, i).pos.y/WINDOW_SIZE_H;
         MAT_AT(target, i, 0) = ColorToInt(da_at(points, i).color) == ColorToInt(GREEN) ? 0 : 1;
     }
-    pthread_mutex_unlock(&nn_worker_mutex);
     train(nn, 1e-1f, input, target, (size_t)1e4, &nn_update_request);
 
     mat_free(input);
     mat_free(target);
 }
-void nn_worker_gen_texture() 
+void nn_gen_texture() 
 {
     Row input = row_alloc(2);
     for(int height = 0; height < WINDOW_SIZE_H; height++) {
@@ -310,20 +255,11 @@ void nn_worker_gen_texture()
         }
 
     }
-    pthread_mutex_lock(&nn_worker_mutex);
     Color *tmp_buf = pixel_front_buf;
     pixel_front_buf = pixel_back_buf;
     pixel_back_buf = tmp_buf;
     nn_texture_rdy = true;
-    pthread_mutex_unlock(&nn_worker_mutex);
     row_free(input);
-}
-void restart_nn_worker()
-{
-    pthread_mutex_lock(&nn_worker_mutex);
-    nn_update_request = true;
-    pthread_cond_signal(&nn_worker_cond);
-    pthread_mutex_unlock(&nn_worker_mutex);
 }
 inline float rand_float()
 {
@@ -749,7 +685,6 @@ void nn_forward_gpu(Network nn, Row input_data, bool *should_stop)
     rlUnloadShaderBuffer(ssbo_output_neurons);
     rlUnloadShaderBuffer(ssbo_weights);
     rlUnloadShaderBuffer(ssbo_biases);
-
 } 
 float loss(Row output, Row target)
 {
