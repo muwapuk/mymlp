@@ -17,10 +17,6 @@
 #define WINDOW_SIZE_W 1920
 #define WINDOW_SIZE_H 1080
 
-#define COMPUTE_SHADER_PATH "./mat_dot.glsl"
-#define NN_FORWARD_SHADER_PATH "./nn_forward.comp"
-
-
 typedef struct {
     Vector2 pos;
     Color color;
@@ -50,7 +46,6 @@ int rect_size = 5;
 Color *pixel_front_buf;
 Color *pixel_back_buf;
 
-unsigned int nn_train_program;
 
 void nn_retrain();
 void nn_gen_texture();
@@ -80,10 +75,6 @@ int main()
 
     nn = nn_alloc(layout, ARRAY_LEN(layout));
 
-    char *nn_train_shader_src = LoadFileText(NN_FORWARD_SHADER_PATH);
-    unsigned int nn_train_shader = rlLoadShader(nn_train_shader_src, RL_COMPUTE_SHADER);
-    UnloadFileText(nn_train_shader_src);
-    nn_train_program = rlLoadShaderProgramCompute(nn_train_shader);
     
     while(!WindowShouldClose()) {
         if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -116,7 +107,6 @@ int main()
 
 
     UnloadTexture(nn_texture);
-    rlUnloadShaderProgram(nn_train_program);
     free(pixel_front_buf);
     nn_free(nn);
     CloseWindow();

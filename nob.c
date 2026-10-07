@@ -19,6 +19,7 @@ int main(int argc, char **argv)
     cmd_append(&cmd, "-lm");
     cmd_append(&cmd, "-ggdb");
     cmd_append(&cmd, "-o", "build/main");
+    cmd_append(&cmd, "row.c", "mat.c", "nn.c", "nn_gpu.c");
     cmd_append(&cmd, "main.c", "./libraylib.a");
     if (!cmd_run(&cmd)) return 1;
 

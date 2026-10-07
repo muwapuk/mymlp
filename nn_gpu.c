@@ -1,4 +1,5 @@
 #include "nn_gpu.h"
+#include "raylib.h"
 #include "rlgl.h"
 #include "glad.h"
 
@@ -9,6 +10,17 @@
 #include <string.h>
 
 
+void init_nn_gpu()
+{
+    char *nn_train_shader_src = LoadFileText(NN_FORWARD_SHADER_PATH);
+    unsigned int nn_train_shader = rlLoadShader(nn_train_shader_src, RL_COMPUTE_SHADER);
+    UnloadFileText(nn_train_shader_src);
+    nn_train_program = rlLoadShaderProgramCompute(nn_train_shader);
+}
+void clear_nn_gpu()
+{
+    rlUnloadShaderProgram(nn_train_program);
+}
 void nn_forward_gpu(Network nn, Row input_data, bool *should_stop)
 {
     if(!nn.layers_sizes 
