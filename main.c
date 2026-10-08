@@ -37,7 +37,7 @@ bool nn_update_request = false;
 bool nn_texture_rdy = false;
 
 Network nn;
-size_t layout[] = { 2, 161, 16, 1 };
+size_t layout[] = { 2, 8, 16, 1 };
 
 Points points = {0};
 float rad = 5;

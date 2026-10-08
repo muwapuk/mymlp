@@ -249,3 +249,12 @@ nn_train_exit:
     free(dWsum);
     free(dBsum);
 }
+float loss(Row output, Row target)
+{
+    float loss = 0.f;
+    for(size_t col = 0; col < output.cols; col++) {
+        float diff = ROW_AT(output, col) - ROW_AT(target, col);
+        loss += 0.5f * diff * diff;
+    }
+    return loss;
+}

@@ -1,0 +1,50 @@
+
+layout(local_size_x = 128) in;
+
+uniform uint u_input_size;
+uniform uint u_output_size;
+uniform uint u_batch_count;
+uniform uint u_weights_offset;
+uniform uint u_biases_offset;
+uniform bool u_backpropogation;
+
+layout(std430, binding = 0) buffer InputBuffer {
+    float input_buffer[];
+};
+layout(std430, binding = 1) buffer OutputBuffer {
+    float output_buffer[];
+};
+layout(std430, binding = 2) buffer WeightsBuffer {
+    float weights[];
+};
+layout(std430, binding = 3) buffer BiasesBuffer {
+    float biases[];
+};
+layout(std430, binding = 4) buffer DeltaBuffer {
+    float delta[];
+};
+layout(std430, binding = 5) buffer WeightsDeltaBuffer {
+    float weights_delta[];
+};
+layout(std430, binding = 6) buffer BiasesDeltaBuffer {
+    float biases_delta[];
+};
+
+float activation(float x)
+{
+    return 1.0 / (1.0 + exp(-x));
+}
+
+void main()
+{
+    uint neuron_num = gl_GlobalInvocationID.x;
+    
+    float sum = 0.f;
+    if(neuron_num >= u_output_size) return;
+    for(int i = 0; i < u_input_size; i++) {
+       sum += input_buffer[i] * weights[u_output_size * i + neuron_num + u_weights_offset]; 
+    }
+    sum += biases[neuron_num+u_biases_offset]; 
+
+    output_buffer[neuron_num] = activation(sum);
+}
