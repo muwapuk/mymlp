@@ -1,9 +1,11 @@
+#version 430 core
+#extension GL_EXT_shader_atomic_float : enable
 
 layout(local_size_x = 128) in;
 
 uniform uint u_input_size;
 uniform uint u_output_size;
-uniform uint u_batch_count;
+uniform uint u_samples_count;
 uniform uint u_weights_offset;
 uniform uint u_biases_offset;
 uniform bool u_backpropogation;
@@ -38,13 +40,16 @@ float activation(float x)
 void main()
 {
     uint neuron_num = gl_GlobalInvocationID.x;
+    if(neuron_num >= u_output_size*u_samples_count) return;
     
-    float sum = 0.f;
-    if(neuron_num >= u_output_size) return;
-    for(int i = 0; i < u_input_size; i++) {
-       sum += input_buffer[i] * weights[u_output_size * i + neuron_num + u_weights_offset]; 
-    }
-    sum += biases[neuron_num+u_biases_offset]; 
+    uint current_sample = neuron_num/u_output_size;
+    if(!u_backpropogation) {
+        float sum = 0.f;
+        for(int i = current_sample*u_input_size; i < u_input_size+(current_sample*u_input_size); i++) {
+           sum += input_buffer[i] * weights[u_output_size * i + neuron_num + u_weights_offset]; 
+        }
+        sum += biases[neuron_num+u_biases_offset]; 
 
-    output_buffer[neuron_num] = activation(sum);
+        output_buffer[neuron_num] = activation(sum);
+    }
 }
