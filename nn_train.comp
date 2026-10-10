@@ -1,55 +1,121 @@
 #version 430 core
-#extension GL_EXT_shader_atomic_float : enable
 
 layout(local_size_x = 128) in;
 
+uniform uint u_batch_size;
 uniform uint u_input_size;
 uniform uint u_output_size;
-uniform uint u_samples_count;
-uniform uint u_weights_offset;
-uniform uint u_biases_offset;
-uniform bool u_backpropogation;
+
+uniform int u_is_backprop;
+uniform int u_is_last_layer;
 
 layout(std430, binding = 0) buffer InputBuffer {
-    float input_buffer[];
+    float inputs[]; // Sampled
 };
 layout(std430, binding = 1) buffer OutputBuffer {
-    float output_buffer[];
+    float outputs[]; // Sampled
 };
 layout(std430, binding = 2) buffer WeightsBuffer {
-    float weights[];
+    float weights[]; // Shared
 };
 layout(std430, binding = 3) buffer BiasesBuffer {
-    float biases[];
+    float biases[]; // Shared
 };
-layout(std430, binding = 4) buffer DeltaBuffer {
-    float delta[];
+layout(std430, binding = 4) buffer TargetsBuffer {
+    float targets[]; // Sampled
 };
-layout(std430, binding = 5) buffer WeightsDeltaBuffer {
-    float weights_delta[];
+layout(std430, binding = 5) buffer OutputGradientsBuffer {
+    float output_gradients[]; // Sampled
 };
-layout(std430, binding = 6) buffer BiasesDeltaBuffer {
-    float biases_delta[];
+layout(std430, binding = 6) buffer InputGradientsBuffer {
+    float input_gradients[]; // Sampled
 };
+layout(std430, binding = 7) buffer WeightsGradientsBuffer {
+    float w_gradients[]; // Sampled
+};
+layout(std430, binding = 8) buffer BiasesGradientsBuffer {
+    float b_gradients[]; // Sampled
+};
+
 
 float activation(float x)
 {
     return 1.0 / (1.0 + exp(-x));
 }
 
+void forward(uint thread_id)
+{
+    if(thread_id >= outputs.length()) return;
+
+    uint current_sample = thread_id / u_output_size;
+    uint output_neuron_num = thread_id % u_output_size;
+    int input_sample_start = current_sample * u_input_size;
+
+    float sum = biases[output_neuron_num];
+    for(int i = 0; i < u_input_size; i++) {
+        sum += inputs[i + input_sample_start] * weights[i * u_output_size + output_neuron_num];
+    }
+    outputs[thread_id] = activation(sum);
+}
+void calculate_loss(uint thread_id)
+{
+    if(thread_id >= outputs.length()) return;
+
+    //delta[last_l] = (Al - y) * Al * (1 - Al)
+    float A = outputs[thread_id];
+    output_gradients[thread_id] = (A - targets[thread_id]) * A * (1.0 - A);
+}
+void compute_weights_and_biases(uint thread_id)
+{
+    if(thread_id >= outputs.length()) return;
+    uint current_sample = thread_id / u_output_size;
+    uint output_neuron_num = thread_id % u_output_size;
+    int input_sample_start = current_sample * u_input_size;
+
+    uint weights_num_per_layer = u_input_size * u_output_size;
+    uint batch_weight_offset = current_sample * weights_num_per_layer;
+
+    // delta Wl = delta[l] * Al-1
+    for (uint i = 0; i < u_input_size; i++) {
+        uint weight_idx = i * u_output_size + output_neuron_num;
+        w_gradients[batch_weight_offset + weight_idx] = 
+            output_gradients[thread_id] * inputs[input_sample_start + i];
+    }
+    // delta bl = delta[l]
+    b_gradients[thread_id] = output_gradients[thread_id];
+}
+void backpropogation(uint thread_id)
+{
+    if(thread_id >= inputs.length()) return;
+
+    uint current_sample = thread_id / u_input_size;
+    uint input_neuron_num = thread_id % u_input_size;
+    uint input_sample_start = current_sample * u_input_size;
+
+    // delta[l]-1 = delta[l] * Wl * Al-1 * (1 - Al-1) 
+    float sum = 0.0f;
+    for (uint i = 0; i < u_output_size; i++) {
+        sum += 
+            weights[input_neuron_num * u_output_size + i] * 
+            output_gradients[current_sample * u_output_size + i];
+    }
+    float A = inputs[input_sample_start + input_neuron_num];
+    float Aderiv = A * (1.0f - A);
+
+    input_gradients[thread_id] = sum * Aderiv;
+}
 void main()
 {
-    uint neuron_num = gl_GlobalInvocationID.x;
-    if(neuron_num >= u_output_size*u_samples_count) return;
-    
-    uint current_sample = neuron_num/u_output_size;
-    if(!u_backpropogation) {
-        float sum = 0.f;
-        for(int i = current_sample*u_input_size; i < u_input_size+(current_sample*u_input_size); i++) {
-           sum += input_buffer[i] * weights[u_output_size * i + neuron_num + u_weights_offset]; 
-        }
-        sum += biases[neuron_num+u_biases_offset]; 
+    uint thread_id = gl_GlobalInvocationID.x;
 
-        output_buffer[neuron_num] = activation(sum);
+    if(!u_is_backprop) {
+        forward(thread_id);
+    } else {
+        if(u_is_last_layer) {
+            calculate_loss(thread_id);
+        }
+        compute_weights_and_biases(thread_id);
+        backpropogation(thread_id);
+        // TODO: Aply gradients on weights and biases
     }
 }
