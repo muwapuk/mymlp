@@ -86,7 +86,11 @@ void compute_weights_and_biases(uint thread_id)
 }
 void backpropogation(uint thread_id)
 {
-    if(thread_id >= inputs.length()) return;
+    if(thread_id >= inputs.length()+outputs.length()
+    || thread_id < outputs.length()) return;
+
+    thread_id -= outputs.length();
+    
 
     uint current_sample = thread_id / u_input_size;
     uint input_neuron_num = thread_id % u_input_size;
@@ -106,6 +110,8 @@ void backpropogation(uint thread_id)
 }
 void main()
 {
+    // thread_count is (output_layer_size * batch size) for forward pass
+    // and (output_layer_size * batch_size + input_layer_size * batch_size) for backpropogation
     uint thread_id = gl_GlobalInvocationID.x;
 
     if(!u_is_backprop) {
