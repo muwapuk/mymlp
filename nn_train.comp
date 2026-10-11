@@ -7,6 +7,8 @@ uniform uint u_input_size;
 uniform uint u_output_size;
 
 uniform int u_is_backprop;
+uniform int u_is_gradients_increase;
+uniform int u_is_gradients_apply;
 uniform int u_is_last_layer;
 
 layout(std430, binding = 0) buffer InputBuffer {
@@ -35,6 +37,12 @@ layout(std430, binding = 7) buffer WeightsGradientsBuffer {
 };
 layout(std430, binding = 8) buffer BiasesGradientsBuffer {
     float b_gradients[]; // Sampled
+};
+layout(std430, binding = 9) buffer weightsTotalGradientsBuffer {
+    float w_gradients_total[]; // Sampled
+};
+layout(std430, binding = 10) buffer BiasesTotalGradientsBuffer {
+    float b_gradients_total[]; // Sampled
 };
 
 
@@ -65,7 +73,7 @@ void calculate_loss(uint thread_id)
     float A = outputs[thread_id];
     output_gradients[thread_id] = (A - targets[thread_id]) * A * (1.0 - A);
 }
-void compute_weights_and_biases(uint thread_id)
+void compute_weights(uint thread_id)
 {
     if(thread_id >= outputs.length()) return;
     uint current_sample = thread_id / u_output_size;
@@ -81,17 +89,23 @@ void compute_weights_and_biases(uint thread_id)
         w_gradients[batch_weight_offset + weight_idx] = 
             output_gradients[thread_id] * inputs[input_sample_start + i];
     }
+}
+void compute_biases(uint thread_id) 
+{
+    if(thread_id >= outputs.length()*2 
+    || thread_id < outputs.length()) return;
+    thread_id -= outputs.length();
+
     // delta bl = delta[l]
     b_gradients[thread_id] = output_gradients[thread_id];
 }
 void backpropogation(uint thread_id)
 {
-    if(thread_id >= inputs.length()+outputs.length()
-    || thread_id < outputs.length()) return;
+    if(thread_id >= inputs.length()+outputs.length()*2
+    || thread_id < outputs.length()*2) return;
 
-    thread_id -= outputs.length();
+    thread_id -= outputs.length()*2;
     
-
     uint current_sample = thread_id / u_input_size;
     uint input_neuron_num = thread_id % u_input_size;
     uint input_sample_start = current_sample * u_input_size;
@@ -108,6 +122,26 @@ void backpropogation(uint thread_id)
 
     input_gradients[thread_id] = sum * Aderiv;
 }
+void increaseTotalGradients(uint thread_id)
+{
+    if(thread_id < w_gradients.length()) {
+        w_gradients_total[thread_id] += w_gradients[thread_id];
+    } else if(thread_id >= w_gradients.length()
+           && thread_id < w_gradients.length()+b_gradients.length()) {
+        uint b_idx = thread_id-w_gradients.length();
+        b_gradients_total[b_idx] += b_gradients[b_idx];
+    }
+}
+void applyTotalGradients(uint thread_id)
+{
+    if(thread_id < weights.length()) {
+        weights[thread_id] -= w_gradients_total[thread_id];
+    } else if(thread_id >= weights.length()
+           && thread_id < weights.length()+biases.length()) {
+        b_idx = thread_id-weights.length();
+        biases[b_idx] -= b_gradients_total[b_idx];
+    }
+}
 void main()
 {
     // thread_count is (output_layer_size * batch size) for forward pass
@@ -115,13 +149,19 @@ void main()
     uint thread_id = gl_GlobalInvocationID.x;
 
     if(!u_is_backprop) {
-        forward(thread_id);
+        if(u_is_gradients_increase) {
+            increaseTotalGradients(thread_id);
+        } else if(u_is_gradients_apply) {
+            applyTotalGradients(thread_id);
+        } else {
+            forward(thread_id);
+        }
     } else {
         if(u_is_last_layer) {
             calculate_loss(thread_id);
-        }
-        compute_weights_and_biases(thread_id);
-        backpropogation(thread_id);
-        // TODO: Aply gradients on weights and biases
+        }                           // Outputs.length()*2+inputs.length() threads total
+        compute_weights(thread_id); //// First outputs.length() count of threads
+        compute_biases(thread_id);  //// Second outputs.length() count of threads
+        backpropogation(thread_id); //// Last inputs.length() count of threads
     }
 }

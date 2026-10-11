@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 
-bool is_weighs_biases_init = false;
+bool is_weights_biases_init = false;
 
 unsigned int *activations_ssbos;
 unsigned int *weights_ssbos;
@@ -24,6 +24,8 @@ unsigned int *b_gradients_total;
 int u_batch_size;
 int u_input_size;
 int u_output_size;
+int u_is_gradients_increase;
+int u_is_gradients_apply;
 
 int u_is_backprop;
 int u_is_last_layer;
@@ -57,13 +59,15 @@ void init_nn_gpu(Network nn)
     free(biases_ssbos);
 
     init_weights_and_biases_buffers(nn);
-    is_weighs_biases_init  = true;
+    is_weights_biases_init  = true;
 
     u_batch_size = rlGetLocationUniform(nn_shader_program, "u_batch_size");
     u_input_size = rlGetLocationUniform(nn_shader_program, "u_input_size");
     u_output_size = rlGetLocationUniform(nn_shader_program, "u_output_size");
     u_is_backprop = rlGetLocationUniform(nn_shader_program, "u_is_backprop");
     u_is_last_layer = rlGetLocationUniform(nn_shader_program, "u_is_last_layer");
+    u_is_gradients_increase = rlGetLocationUniform(nn_shader_program, "u_is_gradients_increase");
+    u_is_gradients_apply = rlGetLocationUniform(nn_shader_program, "u_is_gradients_apply");
 }
 void clear_nn_gpu(Network nn)
 {
@@ -88,7 +92,7 @@ static void init_activation_buffers(Network nn, Mat input)
 }
 void nn_forward_gpu(Network nn, Mat input_data, Mat output_data, bool *should_stop)
 {
-    if(!is_weighs_biases_init) return;
+    if(!is_weights_biases_init) return;
     init_activation_buffers(nn, input_data);
     for(size_t l = 0; l < nn.layers_count-1; l++) {
         rlBindShaderBuffer(activations_ssbos[l], 0);
@@ -155,7 +159,7 @@ void nn_train_gpu(Network nn,
            size_t epoch_count,
            bool *should_stop)
 {
-    if(!is_weighs_biases_init) return;
+    if(!is_weights_biases_init) return;
 
     size_t batch_size = input_data.rows;
 
@@ -199,20 +203,50 @@ void nn_train_gpu(Network nn,
             rlBindShaderBuffer(w_gradients[l], 7);  
             rlBindShaderBuffer(b_gradients[l], 8); 
 
-            bool is_lust_layer = (l == (ssize_t)nn.layers_count - 2) ? 1 : 0;
+            bool is_last_layer = (l == (ssize_t)nn.layers_count - 2) ? 1 : 0;
             rlSetUniform(u_is_backprop, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
-            rlSetUniform(u_is_last_layer, &is_lust_layer, RL_SHADER_UNIFORM_INT, 1);
+            rlSetUniform(u_is_last_layer, &is_last_layer, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_input_size, &nn.layers_sizes[l], RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_output_size, &nn.layers_sizes[l+1], RL_SHADER_UNIFORM_UINT, 1);
 
-            size_t max_threads = batch_size * (in_size > out_size ? in_size : out_size);
-            size_t groups = (max_threads + 128 - 1) / 128;
+            size_t total_threads = batch_size * (in_size > out_size ? in_size : out_size);
+            size_t groups = (total_threads + 128 - 1) / 128;
             rlComputeShaderDispatch(groups, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
 
             // Reduction 
             // TODO: Reduction shader
+
+            rlBindShaderBuffer(w_gradients_total[l], 9);  
+            rlBindShaderBuffer(b_gradients_total[l], 10); 
+
+            rlSetUniform(u_is_backprop, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
+            rlSetUniform(u_is_gradients_increase, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
+            rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
+
+            total_threads = batch_size * in_size * out_size;
+            groups = (total_threads + 128 - 1) / 128;
+            rlComputeShaderDispatch(groups, 1, 1);
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+        }
+        for (ssize_t l = (ssize_t)nn.layers_count - 2; l >= 0; l--) {
+            size_t in_size = nn.layers_sizes[l];
+            size_t out_size = nn.layers_sizes[l + 1];
+
+            rlBindShaderBuffer(weights_ssbos[l], 2);          
+            rlBindShaderBuffer(biases_ssbos[l], 3);          
+            rlBindShaderBuffer(w_gradients_total[l], 9);  
+            rlBindShaderBuffer(b_gradients_total[l], 10); 
+
+            rlSetUniform(u_is_backprop, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
+            rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
+            rlSetUniform(u_is_gradients_apply, &(int){1}, RL_SHADER_UNIFORM_UINT, 1);
+
+            size_t total_threads = batch_size * in_size * out_size;
+            size_t groups = (total_threads + 128 - 1) / 128;
+            rlComputeShaderDispatch(groups, 1, 1);
+            glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
         }
     }
 }
