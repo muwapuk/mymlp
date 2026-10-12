@@ -12,7 +12,7 @@
 #include "rlgl.h"
 
 #include "darray.h"
-#include "nn.h"
+#include "nn_gpu.h"
 
 #define WINDOW_SIZE_W 1920
 #define WINDOW_SIZE_H 1080
@@ -74,7 +74,7 @@ int main()
     ImageClearBackground(&nn_image, DARKGRAY);
 
     nn = nn_alloc(layout, ARRAY_LEN(layout));
-
+    init_nn_gpu(nn);
     
     while(!WindowShouldClose()) {
         if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
@@ -107,6 +107,7 @@ int main()
 
 
     UnloadTexture(nn_texture);
+    reset_nn_gpu(nn);
     free(pixel_front_buf);
     nn_free(nn);
     CloseWindow();
@@ -122,38 +123,42 @@ void nn_retrain()
         MAT_AT(input, i, 1) = da_at(points, i).pos.y/WINDOW_SIZE_H;
         MAT_AT(target, i, 0) = ColorToInt(da_at(points, i).color) == ColorToInt(GREEN) ? 0 : 1;
     }
-    train(nn, 1e-1f, input, target, (size_t)1e4, &nn_update_request);
+    nn_train_gpu(nn, 1e-1f, input, target, (size_t)1e4, &nn_update_request);
 
     mat_free(input);
     mat_free(target);
 }
 void nn_gen_texture() 
 {
-    Row input = row_alloc(2);
+    Mat input = mat_alloc((size_t)WINDOW_SIZE_W*WINDOW_SIZE_H, 2);
+    Mat output = mat_alloc((size_t)WINDOW_SIZE_W*WINDOW_SIZE_H, 1);
     for(int height = 0; height < WINDOW_SIZE_H; height++) {
         for(int width = 0; width < WINDOW_SIZE_W; width++) {
-            int index = height*WINDOW_SIZE_W + width;
-            ROW_AT(input, 0) = (float)width/WINDOW_SIZE_W;
-            ROW_AT(input, 1) = (float)height/WINDOW_SIZE_H;
-            nn_forward(nn, input, &nn_update_request);
+            int index = height * WINDOW_SIZE_W + width;
+            MAT_AT(input, index, 0) = (float)width/WINDOW_SIZE_W;
+            MAT_AT(input, index, 1) = (float)height/WINDOW_SIZE_H;
             if(nn_update_request) {
-                row_free(input);
+                mat_free(input);
+                mat_free(output);
                 return;
             }
-            unsigned char green_value = (unsigned char)(255*ROW_AT(NN_OUTPUT(nn), 0));
-            Color pix = {
-                0,
-                255-green_value,
-                green_value,
-                255,
-            };
-            pixel_back_buf[index] = pix; 
         }
-
+    }
+    nn_forward_gpu(nn, input, output, &nn_update_request);
+    for(int i = 0; i < WINDOW_SIZE_H*WINDOW_SIZE_W; i++) {
+        unsigned char green_value = (unsigned char)(255*output.data[i]);
+        Color pix = {
+            0,
+            255-green_value,
+            green_value,
+            255,
+        };
+        pixel_back_buf[i] = pix; 
     }
     Color *tmp_buf = pixel_front_buf;
     pixel_front_buf = pixel_back_buf;
     pixel_back_buf = tmp_buf;
     nn_texture_rdy = true;
-    row_free(input);
+    mat_free(input);
+    mat_free(output);
 }

@@ -8,10 +8,8 @@
 
 #define WORKGROUP_SIZE 128
 
-unsigned int nn_shader_program;
-
 void init_nn_gpu(Network nn);
-void clear_nn_gpu(Network nn);
+void reset_nn_gpu(Network nn);
 void nn_forward_gpu(Network nn, Mat input_data, Mat output_data, bool *should_stop); // Each row of Mat input_data represents different inputs to forward.
 void nn_backpropagation_gpu(Network nn,
                      Row target_output, 

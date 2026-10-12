@@ -9,7 +9,8 @@ uniform uint u_output_size;
 uniform int u_is_backprop;
 uniform int u_is_gradients_increase;
 uniform int u_is_gradients_apply;
-uniform int u_is_last_layer;
+uniform int u_calculate_loss;
+uniform float u_learning_rate;
 
 layout(std430, binding = 0) buffer InputBuffer {
     float inputs[]; // Sampled
@@ -39,10 +40,10 @@ layout(std430, binding = 8) buffer BiasesGradientsBuffer {
     float b_gradients[]; // Sampled
 };
 layout(std430, binding = 9) buffer weightsTotalGradientsBuffer {
-    float w_gradients_total[]; // Sampled
+    float w_gradients_total[]; // Shared
 };
 layout(std430, binding = 10) buffer BiasesTotalGradientsBuffer {
-    float b_gradients_total[]; // Sampled
+    float b_gradients_total[]; // Shared
 };
 
 
@@ -53,11 +54,11 @@ float activation(float x)
 
 void forward(uint thread_id)
 {
-    if(thread_id >= outputs.length()) return;
+    if(thread_id >= uint(outputs.length())) return;
 
     uint current_sample = thread_id / u_output_size;
     uint output_neuron_num = thread_id % u_output_size;
-    int input_sample_start = current_sample * u_input_size;
+    uint input_sample_start = current_sample * u_input_size;
 
     float sum = biases[output_neuron_num];
     for(int i = 0; i < u_input_size; i++) {
@@ -67,7 +68,7 @@ void forward(uint thread_id)
 }
 void calculate_loss(uint thread_id)
 {
-    if(thread_id >= outputs.length()) return;
+    if(thread_id >= uint(outputs.length())) return;
 
     //delta[last_l] = (Al - y) * Al * (1 - Al)
     float A = outputs[thread_id];
@@ -75,10 +76,10 @@ void calculate_loss(uint thread_id)
 }
 void compute_weights(uint thread_id)
 {
-    if(thread_id >= outputs.length()) return;
+    if(thread_id >= uint(outputs.length())) return;
     uint current_sample = thread_id / u_output_size;
     uint output_neuron_num = thread_id % u_output_size;
-    int input_sample_start = current_sample * u_input_size;
+    uint input_sample_start = current_sample * u_input_size;
 
     uint weights_num_per_layer = u_input_size * u_output_size;
     uint batch_weight_offset = current_sample * weights_num_per_layer;
@@ -92,19 +93,19 @@ void compute_weights(uint thread_id)
 }
 void compute_biases(uint thread_id) 
 {
-    if(thread_id >= outputs.length()*2 
-    || thread_id < outputs.length()) return;
-    thread_id -= outputs.length();
+    if(thread_id >= uint(outputs.length())*2 
+    || thread_id < uint(outputs.length())) return;
+    thread_id -= uint(outputs.length());
 
     // delta bl = delta[l]
     b_gradients[thread_id] = output_gradients[thread_id];
 }
 void backpropogation(uint thread_id)
 {
-    if(thread_id >= inputs.length()+outputs.length()*2
-    || thread_id < outputs.length()*2) return;
+    if(thread_id >= uint(inputs.length()+outputs.length())*2
+    || thread_id < uint(outputs.length())*2) return;
 
-    thread_id -= outputs.length()*2;
+    thread_id -= uint(outputs.length())*2;
     
     uint current_sample = thread_id / u_input_size;
     uint input_neuron_num = thread_id % u_input_size;
@@ -124,44 +125,55 @@ void backpropogation(uint thread_id)
 }
 void increaseTotalGradients(uint thread_id)
 {
-    if(thread_id < w_gradients.length()) {
-        w_gradients_total[thread_id] += w_gradients[thread_id];
-    } else if(thread_id >= w_gradients.length()
-           && thread_id < w_gradients.length()+b_gradients.length()) {
-        uint b_idx = thread_id-w_gradients.length();
-        b_gradients_total[b_idx] += b_gradients[b_idx];
+    if(thread_id < uint(w_gradients_total.length())) {
+        float sum = 0.0;
+        for(int i = 0; i < u_batch_size; i++) {
+            sum += w_gradients[thread_id+i*weights.length()];
+        }
+        sum /= u_batch_size;
+        w_gradients_total[thread_id] += sum;
+    } else if(thread_id >= uint(w_gradients_total.length())
+           && thread_id < uint(w_gradients_total.length()+b_gradients_total.length())) {
+        uint b_idx = thread_id-uint(w_gradients_total.length());
+        float sum = 0.0;
+        for(int i = 0; i < u_batch_size; i++) {
+            sum += b_gradients[b_idx+i*biases.length()];
+        }
+        sum /= u_batch_size;
+        b_gradients_total[b_idx] += sum;
     }
 }
 void applyTotalGradients(uint thread_id)
 {
-    if(thread_id < weights.length()) {
-        weights[thread_id] -= w_gradients_total[thread_id];
-    } else if(thread_id >= weights.length()
-           && thread_id < weights.length()+biases.length()) {
-        b_idx = thread_id-weights.length();
-        biases[b_idx] -= b_gradients_total[b_idx];
+    if(thread_id < uint(weights.length())) {
+        weights[thread_id] -= w_gradients_total[thread_id] * u_learning_rate;
+    } else if(thread_id >= uint(weights.length())
+           && thread_id < uint(weights.length()+biases.length())) {
+        uint b_idx = thread_id-uint(weights.length());
+        biases[b_idx] -= b_gradients_total[b_idx] * u_learning_rate;
     }
 }
 void main()
 {
     // thread_count is (output_layer_size * batch size) for forward pass
-    // and (output_layer_size * batch_size + input_layer_size * batch_size) for backpropogation
+    // and (output_layer_size * u_batch_size + input_layer_size * u_batch_size) for backpropogation
     uint thread_id = gl_GlobalInvocationID.x;
 
-    if(!u_is_backprop) {
-        if(u_is_gradients_increase) {
+    if(u_is_backprop != 1) {
+        if(u_is_gradients_increase == 1) {
             increaseTotalGradients(thread_id);
-        } else if(u_is_gradients_apply) {
+        } else if(u_is_gradients_apply == 1) {
             applyTotalGradients(thread_id);
         } else {
             forward(thread_id);
         }
     } else {
-        if(u_is_last_layer) {
+        if(u_calculate_loss == 1) {
             calculate_loss(thread_id);
-        }                           // Outputs.length()*2+inputs.length() threads total
-        compute_weights(thread_id); //// First outputs.length() count of threads
-        compute_biases(thread_id);  //// Second outputs.length() count of threads
-        backpropogation(thread_id); //// Last inputs.length() count of threads
+        } else {                        // Outputs.length()*2+inputs.length() threads total
+            compute_weights(thread_id); //// First outputs.length() count of threads
+            compute_biases(thread_id);  //// Second outputs.length() count of threads
+            backpropogation(thread_id); //// Last inputs.length() count of threads
+        }
     }
 }
