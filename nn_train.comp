@@ -131,7 +131,7 @@ void increaseTotalGradients(uint thread_id)
             sum += w_gradients[thread_id+i*weights.length()];
         }
         sum /= u_batch_size;
-        w_gradients_total[thread_id] += sum;
+        w_gradients_total[thread_id] = sum;
     } else if(thread_id >= uint(w_gradients_total.length())
            && thread_id < uint(w_gradients_total.length()+b_gradients_total.length())) {
         uint b_idx = thread_id-uint(w_gradients_total.length());
@@ -140,7 +140,7 @@ void increaseTotalGradients(uint thread_id)
             sum += b_gradients[b_idx+i*biases.length()];
         }
         sum /= u_batch_size;
-        b_gradients_total[b_idx] += sum;
+        b_gradients_total[b_idx] = sum;
     }
 }
 void applyTotalGradients(uint thread_id)

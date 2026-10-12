@@ -37,7 +37,7 @@ bool nn_update_request = false;
 bool nn_texture_rdy = false;
 
 Network nn;
-size_t layout[] = { 2, 8, 16, 1 };
+size_t layout[] = { 2, 16, 16, 16, 1 };
 
 Points points = {0};
 float rad = 5;
@@ -55,10 +55,6 @@ int main()
     srand(42);
     InitWindow(WINDOW_SIZE_W, WINDOW_SIZE_H, "Window");
     //SetTargetFPS(144);
-
-    bool worker_should_stop = false; 
-
-#define SHOWLOSS
 
     pixel_front_buf = malloc((size_t)WINDOW_SIZE_W * WINDOW_SIZE_H * sizeof(Color));
     pixel_back_buf = malloc((size_t)WINDOW_SIZE_W * WINDOW_SIZE_H * sizeof(Color));
@@ -80,13 +76,19 @@ int main()
         if(IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
             Point p = (Point){ .pos.x = GetMousePosition().x, .pos.y = GetMousePosition().y, GREEN };    
             da_append(points, p);
-            nn_retrain();
-            nn_gen_texture();
+            // train only on set of 20 items
+            if ( points.count > 20 ) {
+                nn_retrain();
+                nn_gen_texture();
+            }
         } else if(IsMouseButtonPressed(MOUSE_BUTTON_RIGHT)) {
             Point p = (Point){ .pos.x = GetMousePosition().x, .pos.y = GetMousePosition().y, BLUE };    
             da_append(points, p);
-            nn_retrain();
-            nn_gen_texture();
+            // train only on set of 20 items
+            if ( points.count > 20 ) {
+                nn_retrain();
+                nn_gen_texture();
+            }
         }
         if(nn_texture_rdy) {
             UpdateTexture(nn_texture, pixel_front_buf); 
@@ -102,9 +104,7 @@ int main()
             DrawFPS(10, 10);
         EndDrawing();
     }
-    worker_should_stop = true;
     nn_update_request = true;
-
 
     UnloadTexture(nn_texture);
     reset_nn_gpu(nn);
@@ -116,6 +116,7 @@ int main()
 }    
 void nn_retrain() 
 {
+    enable_nn_gpu();
     Mat input = mat_alloc(points.count, 2);
     Mat target = mat_alloc(points.count, 1);
     for(size_t i = 0; i < points.count; i++) {
@@ -130,6 +131,7 @@ void nn_retrain()
 }
 void nn_gen_texture() 
 {
+    enable_nn_gpu();
     Mat input = mat_alloc((size_t)WINDOW_SIZE_W*WINDOW_SIZE_H, 2);
     Mat output = mat_alloc((size_t)WINDOW_SIZE_W*WINDOW_SIZE_H, 1);
     for(int height = 0; height < WINDOW_SIZE_H; height++) {

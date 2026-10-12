@@ -55,7 +55,6 @@ void init_nn_gpu(Network nn)
     unsigned nn_train_shader = rlLoadShader(nn_train_shader_src, RL_COMPUTE_SHADER);
     UnloadFileText(nn_train_shader_src);
     nn_shader_program = rlLoadShaderProgramCompute(nn_train_shader);
-    rlEnableShader(nn_shader_program);
 
     free(activations_ssbos);
     free(weights_ssbos);
@@ -72,6 +71,10 @@ void init_nn_gpu(Network nn)
     u_is_gradients_increase = rlGetLocationUniform(nn_shader_program, "u_is_gradients_increase");
     u_is_gradients_apply = rlGetLocationUniform(nn_shader_program, "u_is_gradients_apply");
     u_learning_rate = rlGetLocationUniform(nn_shader_program, "u_learning_rate");
+}
+void enable_nn_gpu()
+{
+    rlEnableShader(nn_shader_program);
 }
 static void free_weights_and_biases_buffers(Network nn)
 {
@@ -127,7 +130,7 @@ void nn_forward_gpu(Network nn, Mat input_data, Mat output_data, bool *should_st
         // Set variables
         rlSetUniform(u_is_backprop, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
         rlSetUniform(u_is_gradients_increase, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
-        rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_UINT, 1);
+        rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
         rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
         rlSetUniform(u_input_size, &in_size, RL_SHADER_UNIFORM_UINT, 1);
         rlSetUniform(u_output_size, &out_size, RL_SHADER_UNIFORM_UINT, 1);
@@ -229,7 +232,7 @@ void nn_train_gpu(Network nn,
             // Set variables
             rlSetUniform(u_is_backprop, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_is_gradients_increase, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
-            rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_UINT, 1);
+            rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_input_size, &in_size, RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_output_size, &out_size, RL_SHADER_UNIFORM_UINT, 1);
@@ -245,6 +248,7 @@ void nn_train_gpu(Network nn,
         rlBindShaderBuffer(target_ssbo, 4);           
         rlBindShaderBuffer(gradients_ssbos[nn.layers_count-2], 5);     
         // Set variable
+        rlSetUniform(u_is_backprop, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
         rlSetUniform(u_calculate_loss, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
             // Dispatch
             size_t total_threads = target_output.rows * target_output.cols;
@@ -272,12 +276,12 @@ void nn_train_gpu(Network nn,
             // Set variables
             rlSetUniform(u_is_backprop, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_is_gradients_increase, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
-            rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_UINT, 1);
+            rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_input_size, &in_size, RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_output_size, &out_size, RL_SHADER_UNIFORM_UINT, 1);
             // Dispatch
-            size_t total_threads = (size_t)batch_size * (2 * out_size + in_size);
+            size_t total_threads = (size_t)batch_size * (2 * out_size + (l > 0 ? in_size : 0));
             size_t groups = (total_threads + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             rlComputeShaderDispatch(groups, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
@@ -287,9 +291,9 @@ void nn_train_gpu(Network nn,
             rlBindShaderBuffer(w_gradients_total_ssbos[l], 9);  
             rlBindShaderBuffer(b_gradients_total_ssbos[l], 10); 
             // Set variables
-            rlSetUniform(u_is_backprop, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
+            rlSetUniform(u_is_backprop, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_is_gradients_increase, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
-            rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_UINT, 1);
+            rlSetUniform(u_is_gradients_apply, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
             // Dispatch
             total_threads = (unsigned)(in_size * out_size + out_size);
@@ -307,9 +311,9 @@ void nn_train_gpu(Network nn,
             rlBindShaderBuffer(w_gradients_total_ssbos[l], 9);  
             rlBindShaderBuffer(b_gradients_total_ssbos[l], 10); 
             // Set variables
-            rlSetUniform(u_is_backprop, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
+            rlSetUniform(u_is_backprop, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_is_gradients_increase, &(int){0}, RL_SHADER_UNIFORM_INT, 1);
-            rlSetUniform(u_is_gradients_apply, &(int){1}, RL_SHADER_UNIFORM_UINT, 1);
+            rlSetUniform(u_is_gradients_apply, &(int){1}, RL_SHADER_UNIFORM_INT, 1);
             rlSetUniform(u_batch_size, &batch_size, RL_SHADER_UNIFORM_UINT, 1);
             rlSetUniform(u_learning_rate, &learning_rate, RL_SHADER_UNIFORM_FLOAT, 1);
             // Dispatch
@@ -317,18 +321,19 @@ void nn_train_gpu(Network nn,
             size_t groups = (total_threads + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE;
             rlComputeShaderDispatch(groups, 1, 1);
             glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
-            rlReadShaderBuffer(weights_ssbos[l],
-                    nn.ws[l].data,
-                    nn.ws[l].cols*nn.ws[l].rows*sizeof(*nn.ws->data),
-                    0);
-
-            rlReadShaderBuffer(biases_ssbos[l],
-                    nn.bs[l].data,
-                    nn.bs[l].cols*sizeof(*nn.ws->data),
-                    0);
         }
+    }
+    for (size_t l = 0; l < nn.layers_count - 1; l++) {
+        rlReadShaderBuffer(weights_ssbos[l],
+                nn.ws[l].data,
+                nn.ws[l].cols*nn.ws[l].rows*sizeof(*nn.ws->data),
+                0);
+
+        rlReadShaderBuffer(biases_ssbos[l],
+                nn.bs[l].data,
+                nn.bs[l].cols*sizeof(*nn.ws->data),
+                0);
     }
     free_activation_buffers(nn);
     free_gradients_buffers(nn);
-    free_target_buffer();
 }
